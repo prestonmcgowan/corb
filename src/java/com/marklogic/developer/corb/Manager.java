@@ -19,6 +19,7 @@
 package com.marklogic.developer.corb;
 
 import java.io.File;
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.PrintStream;
@@ -45,6 +46,8 @@ import javax.net.ssl.TrustManager;
 import javax.net.ssl.X509TrustManager;
 
 import com.marklogic.developer.SimpleLogger;
+import com.marklogic.developer.corb.crypto.Crypto;
+import com.marklogic.developer.Utilities;
 import com.marklogic.xcc.AdhocQuery;
 import com.marklogic.xcc.Content;
 import com.marklogic.xcc.ContentCreateOptions;
@@ -129,6 +132,8 @@ public class Manager implements Runnable {
     private URI connectionUri;
 
     private String collection;
+    
+    private Boolean runningEncrypted = false;
 
     private TransformOptions options = new TransformOptions();
 
@@ -155,8 +160,37 @@ public class Manager implements Runnable {
      * @param uriListPath
      */
     public Manager(URI connectionUri, String collection) {
-        this.connectionUri = connectionUri;
-        this.collection = collection;
+        
+        // Configure the logger so we can print "useful" output
+        configureLogger();
+        
+        String connectionString = connectionUri.toString();
+        try {
+            // Since an encrypted password is triggered by the absence of a password and the presence of the keyfiles
+            // Determine if we are missing a password, and then try to build a connectionUri from keyfiles if the password is missing
+            
+            String[] firstParse = connectionString.split("@");      // xcc://user:password      localhost:8045/Database
+        	String[] secondParse = firstParse[0].split(":");    // xcc   //user    password
+    	
+        	// Determine if we are missing a password, if we are try to add one from the keyfiles
+        	if (secondParse.length < 3) {
+        	    try {
+        	        String[] firstPart = {secondParse[0], secondParse[1], Crypto.decryptPassword()};
+        	        connectionString = Utilities.join(firstPart, ":") + "@" + firstParse[1];
+        	        this.runningEncrypted = true;
+        	    } catch (FileNotFoundException e) {
+        	        logger.warning("Unable to decrypt password. Running with a blank password");
+        	    }
+            }
+            
+            this.connectionUri = new URI(connectionString);
+            this.collection = collection;
+            
+        } catch (URISyntaxException e) {
+            logger.logException("URI Syntax Exception when decrypting encrypted password", e);
+        } catch (Exception e){
+            logger.logException("Exception when decrypting encrypted password", e);
+        }   
     }
 
     /**
@@ -224,7 +258,7 @@ public class Manager implements Runnable {
      * @see java.lang.Runnable#run()
      */
     public void run() {
-        configureLogger();
+        
         logger.info(NAME + " starting: " + versionMessage);
         long maxMemory = Runtime.getRuntime().maxMemory() / (1024 * 1024);
         logger.info("maximum heap size = " + maxMemory + " MiB");
@@ -347,7 +381,27 @@ public class Manager implements Runnable {
      *
      */
     private void prepareContentSource() {
-        logger.info("using content source " + connectionUri);
+        if (runningEncrypted) {
+            try {
+                URI printableUri = new URI(
+                    connectionUri.getScheme(), 
+                    connectionUri.getUserInfo().split(":")[0], 
+                    connectionUri.getHost(), 
+                    connectionUri.getPort(), 
+                    connectionUri.getPath(), 
+                    connectionUri.getQuery(), 
+                    connectionUri.getFragment()
+                );
+                logger.info("using content source (password encrypted) " + printableUri);
+            } catch(URISyntaxException e) {
+                logger.logException("Unable to hide the user password", e);
+            }
+        } else {
+            logger.info("using content source " + connectionUri);
+        }
+        
+        
+        
         try {
             // support SSL
             boolean ssl = connectionUri.getScheme().equals("xccs");
