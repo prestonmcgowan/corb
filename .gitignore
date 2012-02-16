@@ -5,3 +5,4 @@ publish.sh
 src/*.sh
 src/simplelogger*
 src/test*
+src/xcc.jar
